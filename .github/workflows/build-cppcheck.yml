@@ -115,10 +115,14 @@ jobs:
         if: runner.os != 'Windows' && matrix.cross == false
         working-directory: cppcheck-src
         run: |
+          export CXXFLAGS="${CXXFLAGS} -O2"
+          export CPPFLAGS="${CPPFLAGS} -DNDEBUG"
+          export LDFLAGS="${LDFLAGS} -O2"
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_GUI=OFF \
             -DHAVE_RULES=ON \
+            -DUSE_MATCHCOMPILER=yes \
             -DFILESDIR=
 
       - name: Configure (Windows)
@@ -126,6 +130,9 @@ jobs:
         working-directory: cppcheck-src
         shell: pwsh
         run: |
+          $env:CXXFLAGS = "$env:CXXFLAGS /O2"
+          $env:CPPFLAGS = "$env:CPPFLAGS /DNDEBUG"
+          $env:LDFLAGS = "$env:LDFLAGS /O2"
           cmake -S . -B build `
             -G "Visual Studio 17 2022" `
             -A x64 `
@@ -134,6 +141,7 @@ jobs:
             -DVCPKG_TARGET_TRIPLET="${env:VCPKG_TARGET_TRIPLET}" `
             -DBUILD_GUI=OFF `
             -DHAVE_RULES=ON `
+            -DUSE_MATCHCOMPILER=yes `
             -DFILESDIR=
 
       - name: Build (Unix native)
@@ -178,6 +186,12 @@ jobs:
           Copy-Item -Recurse platforms out/platforms
 
       # ── QEMU cross builds (armv7, armv6) ─────────────────────────────
+      - name: Set up QEMU
+        if: matrix.cross == true
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm,arm64
+
       - name: Build in QEMU (${{ matrix.qemu_arch }})
         if: matrix.cross == true
         uses: uraimo/run-on-arch-action@v3
@@ -197,12 +211,15 @@ jobs:
             fi
           run: |
             cd /workspace
+            export CXXFLAGS="${CXXFLAGS} -O2"
+            export CPPFLAGS="${CPPFLAGS} -DNDEBUG"
+            export LDFLAGS="${LDFLAGS} -O2"
             git clone --depth 1 --branch "${{ env.CPPCHECK_VERSION }}" "${{ env.CPPCHECK_REPO }}" cppcheck-src
             cmake -S cppcheck-src -B cppcheck-src/build \
               -DCMAKE_BUILD_TYPE=Release \
               -DBUILD_GUI=OFF \
               -DHAVE_RULES=ON \
-              -DUSE_MATCHCOMPILER=Off \
+              -DUSE_MATCHCOMPILER=yes \
               -DDISABLE_DMAKE=ON \
               -DFILESDIR=
             cmake --build cppcheck-src/build --config Release --parallel
