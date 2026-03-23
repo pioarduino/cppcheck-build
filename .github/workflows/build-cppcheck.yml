@@ -201,8 +201,6 @@ jobs:
             pip3 install cmake==3.22.6
           run: |
             cd /workspace
-            export CPPFLAGS="${CPPFLAGS} -DNDEBUG"
-            export LDFLAGS="${LDFLAGS} -O2"
             git clone --depth 1 --branch "${{ env.CPPCHECK_VERSION }}" "${{ env.CPPCHECK_REPO }}" cppcheck-src
             cmake -S cppcheck-src -B cppcheck-src/build \
               -DCMAKE_BUILD_TYPE=Release \
