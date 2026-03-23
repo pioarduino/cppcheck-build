@@ -64,7 +64,7 @@ jobs:
             artifact: cppcheck-linux-armv7
             cross: true
             qemu_arch: armv7
-            qemu_distro: ubuntu22.04
+            qemu_distro: bullseye
 
           - runner: ubuntu-latest
             artifact: cppcheck-linux-armv6
