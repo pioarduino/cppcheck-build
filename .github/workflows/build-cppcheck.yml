@@ -197,15 +197,10 @@ jobs:
           install: |
             apt-get update -y
             apt-get install -y git g++ make libpcre3-dev file python3 python3-pip
-            # Install newer CMake for armv6 (Bullseye has only 3.18.4, but we need 3.22+)
-            if [ "${{ matrix.qemu_arch }}" = "armv6" ]; then
-              pip3 install cmake==3.22.6
-            else
-              apt-get install -y cmake
-            fi
+            # Install needed CMake 3.22+
+            pip3 install cmake==3.22.6
           run: |
             cd /workspace
-            export CXXFLAGS="${CXXFLAGS} -O2"
             export CPPFLAGS="${CPPFLAGS} -DNDEBUG"
             export LDFLAGS="${LDFLAGS} -O2"
             git clone --depth 1 --branch "${{ env.CPPCHECK_VERSION }}" "${{ env.CPPCHECK_REPO }}" cppcheck-src
