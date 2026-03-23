@@ -186,12 +186,6 @@ jobs:
           Copy-Item -Recurse platforms out/platforms
 
       # ── QEMU cross builds (armv7, armv6) ─────────────────────────────
-      - name: Set up QEMU
-        if: matrix.cross == true
-        uses: docker/setup-qemu-action@v3
-        with:
-          platforms: arm,arm64
-
       - name: Build in QEMU (${{ matrix.qemu_arch }})
         if: matrix.cross == true
         uses: uraimo/run-on-arch-action@v3
@@ -202,10 +196,14 @@ jobs:
           dockerRunArgs: --volume "${{ github.workspace }}:/workspace"
           install: |
             apt-get update -y
-            apt-get install -y git g++ make libpcre3-dev file wget
+            apt-get install -y git g++ make libpcre3-dev file wget ca-certificates
             # Install newer CMake for armv6 (Bullseye has only 3.18.4, but we need 3.22+)
             if [ "${{ matrix.qemu_arch }}" = "armv6" ]; then
-              wget -qO- "https://cmake.org/files/v3.22/cmake-3.22.1-linux-armv6l.tar.gz" | tar --strip-components=1 -xz -C /usr/local
+              cd /tmp
+              wget https://github.com/Kitware/CMake/releases/download/v3.22.1/cmake-3.22.1-linux-armv6l.tar.gz
+              tar -xzf cmake-3.22.1-linux-armv6l.tar.gz
+              cp -r cmake-3.22.1-linux-armv6l/* /usr/local/
+              rm -rf cmake-3.22.1-linux-armv6l*
             else
               apt-get install -y cmake
             fi
