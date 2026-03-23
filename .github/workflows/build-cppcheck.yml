@@ -196,14 +196,10 @@ jobs:
           dockerRunArgs: --volume "${{ github.workspace }}:/workspace"
           install: |
             apt-get update -y
-            apt-get install -y git g++ make libpcre3-dev file wget ca-certificates
+            apt-get install -y git g++ make libpcre3-dev file wget ca-certificates python3 python3-pip
             # Install newer CMake for armv6 (Bullseye has only 3.18.4, but we need 3.22+)
             if [ "${{ matrix.qemu_arch }}" = "armv6" ]; then
-              cd /tmp
-              wget https://github.com/Kitware/CMake/releases/download/v3.22.1/cmake-3.22.1-linux-armv6l.tar.gz
-              tar -xzf cmake-3.22.1-linux-armv6l.tar.gz
-              cp -r cmake-3.22.1-linux-armv6l/* /usr/local/
-              rm -rf cmake-3.22.1-linux-armv6l*
+              pip3 install cmake==3.22.1
             else
               apt-get install -y cmake
             fi
