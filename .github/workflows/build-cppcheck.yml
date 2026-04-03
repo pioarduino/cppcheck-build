@@ -221,7 +221,8 @@ jobs:
             -DHAVE_RULES=ON \
             -DUSE_MATCHCOMPILER=yes \
             -DDISABLE_DMAKE=ON \
-            -DFILESDIR=
+            -DFILESDIR= \
+            $EXTRA_CMAKE_FLAGS
 
       - name: Build (cross armhf)
         if: matrix.cross == true
