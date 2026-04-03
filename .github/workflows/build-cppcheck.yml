@@ -90,7 +90,29 @@ jobs:
         run: |
           sudo dpkg --add-architecture armhf
           sudo apt-get update
-          sudo apt-get install -y git cmake make crossbuild-essential-armhf libpcre3-dev:armhf
+          sudo apt-get install -y git cmake make crossbuild-essential-armhf
+          if [ "${{ matrix.cross_arch }}" = "armv7" ]; then
+            sudo apt-get install -y libpcre3-dev:armhf
+          fi
+
+      # ── Build PCRE from source for armv6 ────────────────────────────
+      - name: Build PCRE from source (armv6)
+        if: matrix.cross_arch == 'armv6'
+        run: |
+          curl -L -o pcre-8.45.tar.gz "https://sourceforge.net/projects/pcre/files/pcre/8.45/pcre-8.45.tar.gz/download"
+          tar xzf pcre-8.45.tar.gz
+          cmake -S pcre-8.45 -B pcre-8.45/build \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=arm \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+            -DCMAKE_C_FLAGS="-march=${{ matrix.cross_march }} -O2 -DNDEBUG" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=${{ github.workspace }}/pcre-armv6 \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DPCRE_BUILD_PCREGREP=OFF \
+            -DPCRE_BUILD_TESTS=OFF
+          cmake --build pcre-8.45/build --parallel
+          cmake --install pcre-8.45/build
 
       # ── Dependencies: macOS ─────────────────────────────────────────
       - name: Install dependencies (macOS)
@@ -207,6 +229,10 @@ jobs:
         if: matrix.cross == true
         working-directory: cppcheck-src
         run: |
+          EXTRA_CMAKE_FLAGS=""
+          if [ -d "${{ github.workspace }}/pcre-armv6" ]; then
+            EXTRA_CMAKE_FLAGS="-DCMAKE_PREFIX_PATH=${{ github.workspace }}/pcre-armv6"
+          fi
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_SYSTEM_NAME=Linux \
@@ -220,7 +246,8 @@ jobs:
             -DHAVE_RULES=ON \
             -DUSE_MATCHCOMPILER=yes \
             -DDISABLE_DMAKE=ON \
-            -DFILESDIR=
+            -DFILESDIR= \
+            $EXTRA_CMAKE_FLAGS
 
       - name: Build (cross armhf)
         if: matrix.cross == true
