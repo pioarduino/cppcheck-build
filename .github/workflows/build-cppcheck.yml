@@ -332,7 +332,7 @@ jobs:
             | `cppcheck-linux-x64.tar.gz` | Linux x86_64 | native |
             | `cppcheck-linux-arm64.tar.gz` | Linux aarch64 | native (ubuntu-24.04-arm) |
             | `cppcheck-linux-armv7.tar.gz` | Linux ARMv7 | cross-compile (arm64) |
-            | `cppcheck-linux-armv6.tar.gz` | Linux ARMv6 | cross-compile (arm64) |
+            | `cppcheck-linux-armv6.tar.gz` | Linux ARMv6 | QEMU |
             | `cppcheck-macos-x64.tar.gz` | macOS x86_64 | native |
             | `cppcheck-macos-arm64.tar.gz` | macOS Apple Silicon | native |
             | `cppcheck-windows-x64.zip` | Windows x64 | native + PCRE |
