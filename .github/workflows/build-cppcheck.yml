@@ -56,18 +56,18 @@ jobs:
             artifact: cppcheck-windows-x64
             cross: false
 
-          # ── QEMU-emulated via uraimo/run-on-arch-action ───────────────
-          - runner: ubuntu-latest
+          # ── Cross-compiled on arm64 runner ─────────────────────────────
+          - runner: ubuntu-24.04-arm
             artifact: cppcheck-linux-armv7
             cross: true
-            qemu_arch: armv7
-            qemu_distro: ubuntu22.04
+            cross_arch: armv7
+            cross_march: armv7-a -mfpu=vfpv3-d16
 
-          - runner: ubuntu-latest
+          - runner: ubuntu-24.04-arm
             artifact: cppcheck-linux-armv6
             cross: true
-            qemu_arch: armv6
-            qemu_distro: bullseye
+            cross_arch: armv6
+            cross_march: armv6 -mfpu=vfp -marm
 
     env:
       CPPCHECK_REPO: https://github.com/danmar/cppcheck.git
@@ -83,6 +83,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y git cmake g++ make libpcre3-dev
+
+      # ── Dependencies: cross-compile armhf on arm64 ─────────────────
+      - name: Install dependencies (Linux cross armhf)
+        if: matrix.cross == true
+        run: |
+          sudo dpkg --add-architecture armhf
+          sudo apt-get update
+          sudo apt-get install -y git cmake make crossbuild-essential-armhf libpcre3-dev:armhf
 
       # ── Dependencies: macOS ─────────────────────────────────────────
       - name: Install dependencies (macOS)
@@ -101,9 +109,8 @@ jobs:
           echo "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "VCPKG_TARGET_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      # ── Clone (all native builds) ────────────────────────────────────
+      # ── Clone ───────────────────────────────────────────────────────
       - name: Clone Cppcheck at latest tag
-        if: matrix.cross == false
         run: |
           git clone --depth 1 --branch "${{ env.CPPCHECK_VERSION }}" "${{ env.CPPCHECK_REPO }}" cppcheck-src
 
@@ -195,51 +202,53 @@ jobs:
           Copy-Item -Recurse addons out/addons
           Copy-Item -Recurse platforms out/platforms
 
-      # ── QEMU cross builds (armv7, armv6) ─────────────────────────────
-      - name: Build in QEMU (${{ matrix.qemu_arch }})
+      # ── Cross-compile armhf (armv7, armv6) ────────────────────────────
+      - name: Configure (cross armhf)
         if: matrix.cross == true
-        uses: uraimo/run-on-arch-action@v3
-        with:
-          arch: ${{ matrix.qemu_arch }}
-          distro: ${{ matrix.qemu_distro }}
-          githubToken: ${{ github.token }}
-          dockerRunArgs: --volume "${{ github.workspace }}:/workspace"
-          install: |
-            apt-get update -y
-            apt-get install -y git g++ make libpcre3-dev file python3 python3-pip
-            # Install newer CMake for armv6 (Bullseye has only 3.18.4, but we need 3.22+)
-            if [ "${{ matrix.qemu_arch }}" = "armv6" ]; then
-              pip3 install cmake==3.22.6
-            else
-              apt-get install -y cmake
-            fi
-          run: |
-            cd /workspace
-            git clone --depth 1 --branch "${{ env.CPPCHECK_VERSION }}" "${{ env.CPPCHECK_REPO }}" cppcheck-src
-            cmake -S cppcheck-src -B cppcheck-src/build \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DBUILD_GUI=OFF \
-              -DHAVE_RULES=ON \
-              -DUSE_MATCHCOMPILER=yes \
-              -DDISABLE_DMAKE=ON \
-              -DFILESDIR=
-            cmake --build cppcheck-src/build --config Release --parallel
-            mkdir -p cppcheck-src/out
-            cp cppcheck-src/build/bin/cppcheck cppcheck-src/out/cppcheck
-            chmod +x cppcheck-src/out/cppcheck
-            cp -r cppcheck-src/cfg cppcheck-src/out/cfg
-            cp -r cppcheck-src/addons cppcheck-src/out/addons
-            cp -r cppcheck-src/platforms cppcheck-src/out/platforms
-            file cppcheck-src/out/cppcheck
-
-      - name: Verify binary architecture (QEMU)
-        if: matrix.cross == true
+        working-directory: cppcheck-src
         run: |
-          INFO="$(file cppcheck-src/out/cppcheck)"
-          echo "$INFO"
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=arm \
+            -DCMAKE_C_COMPILER=arm-linux-gnueabihf-gcc \
+            -DCMAKE_CXX_COMPILER=arm-linux-gnueabihf-g++ \
+            -DCMAKE_C_FLAGS="-march=${{ matrix.cross_march }} -O2 -DNDEBUG" \
+            -DCMAKE_CXX_FLAGS="-march=${{ matrix.cross_march }} -O2 -DNDEBUG" \
+            -DCMAKE_EXE_LINKER_FLAGS="-march=${{ matrix.cross_march }}" \
+            -DBUILD_GUI=OFF \
+            -DHAVE_RULES=ON \
+            -DUSE_MATCHCOMPILER=yes \
+            -DDISABLE_DMAKE=ON \
+            -DFILESDIR=
+
+      - name: Build (cross armhf)
+        if: matrix.cross == true
+        working-directory: cppcheck-src
+        run: cmake --build build --config Release --parallel
+
+      - name: Collect binary (cross armhf)
+        if: matrix.cross == true
+        working-directory: cppcheck-src
+        run: |
+          mkdir -p out
+          cp build/bin/cppcheck out/cppcheck
+          chmod +x out/cppcheck
+          cp -r cfg out/cfg
+          cp -r addons out/addons
+          cp -r platforms out/platforms
+
+      - name: Verify binary architecture (cross armhf)
+        if: matrix.cross == true
+        working-directory: cppcheck-src
+        run: |
+          file out/cppcheck
+          file out/cppcheck | grep -q 'ARM'
+          ARCH_TAG=$(arm-linux-gnueabihf-readelf -A out/cppcheck | grep 'Tag_CPU_arch:' | head -1 | awk '{print $2}')
+          echo "Tag_CPU_arch: ${ARCH_TAG}"
           case "${{ matrix.artifact }}" in
-            cppcheck-linux-armv7) echo "$INFO" | grep -q 'ARM' ;;
-            cppcheck-linux-armv6) echo "$INFO" | grep -q 'ARM' ;;
+            cppcheck-linux-armv7) test "$ARCH_TAG" = "v7" ;;
+            cppcheck-linux-armv6) test "$ARCH_TAG" = "v6" ;;
           esac
 
       # ── Upload ────────────────────────────────────────────────────────
@@ -287,8 +296,8 @@ jobs:
             |---------|------|--------|
             | `cppcheck-linux-x64.tar.gz` | Linux x86_64 | native |
             | `cppcheck-linux-arm64.tar.gz` | Linux aarch64 | native (ubuntu-24.04-arm) |
-            | `cppcheck-linux-armv7.tar.gz` | Linux ARMv7 | QEMU |
-            | `cppcheck-linux-armv6.tar.gz` | Linux ARMv6 | QEMU |
+            | `cppcheck-linux-armv7.tar.gz` | Linux ARMv7 | cross-compile (arm64) |
+            | `cppcheck-linux-armv6.tar.gz` | Linux ARMv6 | cross-compile (arm64) |
             | `cppcheck-macos-x64.tar.gz` | macOS x86_64 | native |
             | `cppcheck-macos-arm64.tar.gz` | macOS Apple Silicon | native |
             | `cppcheck-windows-x64.zip` | Windows x64 | native + PCRE |
