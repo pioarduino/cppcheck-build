@@ -52,9 +52,21 @@ jobs:
             artifact: cppcheck-macos-arm64
             cross: false
 
+          # ── Windows (MSVC) ────────────────────────────────────────────
           - runner: windows-latest
             artifact: cppcheck-windows-x64
             cross: false
+            msvc_arch: x64
+            vcpkg_triplet: x64-windows-static
+            pe_machine: "8664"   # IMAGE_FILE_MACHINE_AMD64
+
+          # Windows on ARM runners are available for public repositories
+          - runner: windows-11-arm
+            artifact: cppcheck-windows-arm64
+            cross: false
+            msvc_arch: arm64
+            vcpkg_triplet: arm64-windows-static
+            pe_machine: "AA64"   # IMAGE_FILE_MACHINE_ARM64
 
           # ── Cross-compiled on arm64 runner ─────────────────────────────
           - runner: ubuntu-24.04-arm
@@ -99,15 +111,26 @@ jobs:
           brew update
           brew install cmake pcre
 
-      # ── Dependencies + Build: Windows ───────────────────────────────
-      - name: Setup vcpkg (Windows)
+      # ── Windows: MSVC toolchain + static PCRE ───────────────────────
+      # Do not hard-code a Visual Studio generator: windows-latest moved to
+      # Visual Studio 2026 (VS 18), where "Visual Studio 17 2022" no longer
+      # exists. Setting up the MSVC developer environment and building with
+      # Ninja works with any installed Visual Studio version.
+      - name: Set up MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.msvc_arch }}
+
+      - name: Install static PCRE via vcpkg (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
-          & "$vcpkgRoot\vcpkg.exe" install pcre:x64-windows-static --triplet x64-windows-static
-          echo "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "VCPKG_TARGET_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $vcpkg = Join-Path $env:VCPKG_INSTALLATION_ROOT 'vcpkg.exe'
+          & $vcpkg install "pcre:${{ matrix.vcpkg_triplet }}" --triplet "${{ matrix.vcpkg_triplet }}"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg install pcre:${{ matrix.vcpkg_triplet }} failed" }
+          "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKG_TARGET_TRIPLET=${{ matrix.vcpkg_triplet }}" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       # ── Clone ───────────────────────────────────────────────────────
       - name: Clone Cppcheck at latest tag
@@ -135,19 +158,19 @@ jobs:
         working-directory: cppcheck-src
         shell: pwsh
         run: |
-          $env:CXXFLAGS = "$env:CXXFLAGS /O2"
-          $env:CPPFLAGS = "$env:CPPFLAGS /DNDEBUG"
-          $env:LDFLAGS = "$env:LDFLAGS /O2"
-          cmake -S . -B build `
-            -G "Visual Studio 17 2022" `
-            -A x64 `
+          # Use the static PCRE from vcpkg so no pcre DLL has to be shipped
+          # next to cppcheck.exe.
+          cmake -S . -B build -G Ninja `
             -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="${env:VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET="${env:VCPKG_TARGET_TRIPLET}" `
+            -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" `
+            -DVCPKG_TARGET_TRIPLET="$env:VCPKG_TARGET_TRIPLET" `
             -DBUILD_GUI=OFF `
+            -DBUILD_TESTING=OFF `
             -DHAVE_RULES=ON `
             -DUSE_MATCHCOMPILER=yes `
+            -DDISABLE_DMAKE=ON `
             -DFILESDIR=
+          if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
 
       - name: Build (Unix native)
         if: runner.os != 'Windows' && matrix.cross == false && matrix.qemu != true
@@ -158,7 +181,9 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: cppcheck-src
         shell: pwsh
-        run: cmake --build build --config Release --parallel
+        run: |
+          cmake --build build --target cppcheck --parallel
+          if ($LASTEXITCODE -ne 0) { throw "Build failed" }
 
       # ── Collect binary: Unix native ──────────────────────────────────
       - name: Collect binary (Unix native)
@@ -191,17 +216,35 @@ jobs:
         working-directory: cppcheck-src
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path out
-          $binary = Get-ChildItem -Recurse -Filter "cppcheck.exe" build | Select-Object -First 1
-          if ($null -eq $binary) {
-            Write-Error "cppcheck.exe not found in build directory!"
-            exit 1
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          if (-not (Test-Path 'build\bin\cppcheck.exe')) {
+            throw "cppcheck.exe not found in build\bin!"
           }
-          Write-Host "Found binary at: $($binary.FullName)"
-          Copy-Item $binary.FullName "out/cppcheck.exe"
+          Copy-Item 'build\bin\cppcheck.exe' 'out\cppcheck.exe'
           Copy-Item -Recurse cfg out/cfg
           Copy-Item -Recurse addons out/addons
           Copy-Item -Recurse platforms out/platforms
+
+      - name: Verify binary architecture (Windows)
+        if: runner.os == 'Windows'
+        working-directory: cppcheck-src
+        shell: pwsh
+        run: |
+          # The binary must actually run - this catches missing DLLs and
+          # other packaging mistakes.
+          $version = & .\out\cppcheck.exe --version
+          if ($LASTEXITCODE -ne 0) { throw "cppcheck.exe --version failed" }
+          Write-Host "Built version: $version"
+          & .\out\cppcheck.exe --errorlist | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "cppcheck.exe --errorlist failed" }
+
+          # Verify the PE machine type (0x8664 = x64, 0xAA64 = ARM64)
+          $bytes = [System.IO.File]::ReadAllBytes((Resolve-Path 'out\cppcheck.exe'))
+          $peOffset = [System.BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [System.BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          $expected = 0x${{ matrix.pe_machine }}
+          Write-Host ("PE machine: 0x{0:X4} (expected 0x{1:X4})" -f $machine, $expected)
+          if ($machine -ne $expected) { throw "Unexpected PE architecture" }
 
       # ── Cross-compile armhf (armv7) ─────────────────────────────────
       - name: Configure (cross armhf)
@@ -296,6 +339,8 @@ jobs:
   release:
     name: Create Release
     needs: [get-version, build]
+    # Only publish from the default branch so runs on other refs are harmless
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -305,11 +350,21 @@ jobs:
 
       - name: Package artifacts
         run: |
-          for dir in cppcheck-linux-x64 cppcheck-linux-arm64 cppcheck-linux-armv7 cppcheck-linux-armv6 cppcheck-macos-x64 cppcheck-macos-arm64; do
-            chmod +x "artifacts/${dir}/cppcheck"
-            tar -czf "artifacts/${dir}.tar.gz" -C "artifacts/${dir}" .
+          set -euo pipefail
+          cd artifacts
+          for dir in */; do
+            name="${dir%/}"
+            case "$name" in
+              *windows*)
+                (cd "$name" && zip -qr "../${name}.zip" .)
+                ;;
+              *)
+                chmod +x "$name/cppcheck"
+                tar -czf "${name}.tar.gz" -C "$name" .
+                ;;
+            esac
           done
-          cd artifacts/cppcheck-windows-x64 && zip -r ../cppcheck-windows-x64.zip . && cd ../..
+          ls -l
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -324,6 +379,7 @@ jobs:
             artifacts/cppcheck-macos-x64.tar.gz
             artifacts/cppcheck-macos-arm64.tar.gz
             artifacts/cppcheck-windows-x64.zip
+            artifacts/cppcheck-windows-arm64.zip
           body: |
             **Auto‑built Cppcheck ${{ needs.get-version.outputs.version }} portable binaries (with cfg & addons):**
 
@@ -335,7 +391,8 @@ jobs:
             | `cppcheck-linux-armv6.tar.gz` | Linux ARMv6 | QEMU |
             | `cppcheck-macos-x64.tar.gz` | macOS x86_64 | native |
             | `cppcheck-macos-arm64.tar.gz` | macOS Apple Silicon | native |
-            | `cppcheck-windows-x64.zip` | Windows x64 | native + PCRE |
+            | `cppcheck-windows-x64.zip` | Windows x64 | native + static PCRE |
+            | `cppcheck-windows-arm64.zip` | Windows ARM64 | native (windows-11-arm) + static PCRE |
 
             Each archive contains `cppcheck`, `cfg/`, `addons/`, and `platforms/`.
             Ready for pioarduino!
